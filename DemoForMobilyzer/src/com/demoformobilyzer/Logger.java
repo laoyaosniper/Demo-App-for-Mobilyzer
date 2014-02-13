@@ -1,6 +1,6 @@
 // Copyright 2011 Google Inc. All Rights Reserved.
 
-package com.demoformobiperflibrary;
+package com.demoformobilyzer;
 
 import android.util.Log;
 

@@ -1,9 +1,10 @@
-package com.demoformobiperflibrary;
+package com.demoformobilyzer;
 
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import android.os.Bundle;
@@ -17,21 +18,30 @@ import android.view.Menu;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.ListView;
+import android.widget.ToggleButton;
+import android.widget.CompoundButton.OnCheckedChangeListener;
 
-import com.demoformobiperflibrary.R;
+import com.demoformobilyzer.R;
 
 
-import com.mobiperf_library.MeasurementResult;
-import com.mobiperf_library.MeasurementTask;
-import com.mobiperf_library.UpdateIntent;
+import com.mobilyzer.MeasurementResult;
+import com.mobilyzer.MeasurementTask;
+import com.mobilyzer.UpdateIntent;
 
-import com.mobiperf_library.api.API;
-import com.mobiperf_library.exceptions.MeasurementError;
+import com.mobilyzer.api.API;
+import com.mobilyzer.exceptions.MeasurementError;
 
 public class MainActivity extends Activity {
+  private Button button;
+  private ToggleButton showUserResultButton;
+  private ToggleButton showSystemResultButton;
+  private boolean userResultsActive;
   private ListView consoleView;
   private ArrayAdapter<String> resultList;
+  private ArrayList<String> userResults;
+  private ArrayList<String> serverResults;
 
   private API api;
   private BroadcastReceiver broadcastReceiver;
@@ -77,7 +87,7 @@ public class MainActivity extends Activity {
          * if it is an parallel or sequential task
          */
         Logger.e("Get result for task " +
-            intent.getParcelableExtra(UpdateIntent.TASKID_PAYLOAD));
+            intent.getStringExtra(UpdateIntent.TASKID_PAYLOAD));
         Parcelable[] parcels =
             intent.getParcelableArrayExtra(UpdateIntent.RESULT_PAYLOAD);
         MeasurementResult[] results = null;
@@ -92,9 +102,24 @@ public class MainActivity extends Activity {
          * Process measurement result: just print it on screen
          * Three delays are logged: API->Scheduler, Scheduler->API, Round trip
          */
+        boolean isUIChange = false;
         if ( results != null ) {
           for ( MeasurementResult r : results ) {
-            resultList.insert(r.toString(), 0);
+            String resultLog = r.toString();
+            if ( intent.getAction().equals(api.userResultAction)) {
+              userResults.add(resultLog);
+              if ( userResultsActive ) {
+                resultList.insert(resultLog, 0);
+                isUIChange = true;
+              }
+            }
+            else {
+              serverResults.add(r.toString());
+              if ( !userResultsActive ) {
+                resultList.insert(resultLog, 0);
+                isUIChange = true;
+              }
+            }
             String sTsApiSend = r.getParameter("ts_api_send");
             String sTsSchedulerRecv = r.getParameter("ts_scheduler_recv");
             if ( sTsApiSend != null ) {
@@ -113,18 +138,55 @@ public class MainActivity extends Activity {
         else {
           resultList.insert("Task failed!", 0);
         }
-        
-        runOnUiThread(new Runnable() {
-          public void run() { resultList.notifyDataSetChanged(); }
-        });
+
+        if ( isUIChange ) {
+          runOnUiThread(new Runnable() {
+            public void run() { resultList.notifyDataSetChanged(); }
+          });
+        }
 
       }
       
     };
     this.registerReceiver(broadcastReceiver, filter);
 
+    showUserResultButton = (ToggleButton) findViewById(R.id.showUserResults);
+    showSystemResultButton = (ToggleButton) findViewById(R.id.showSystemResults);
+    userResults = new ArrayList<String>();
+    serverResults = new ArrayList<String>();
+    showUserResultButton.setChecked(true);
+    showSystemResultButton.setChecked(false);
+    userResultsActive = true;
+    
+    // We enforce a either-or behavior between the two ToggleButtons
+    OnCheckedChangeListener buttonClickListener = new OnCheckedChangeListener() {
+      @Override
+      public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+        Logger.d("onCheckedChanged");
+        userResultsActive = (buttonView == showUserResultButton ? isChecked : !isChecked);
+
+        resultList.clear();
+        final List<String> scheduler_results =
+            (userResultsActive ? userResults : serverResults);
+        for (String result : scheduler_results) {
+          resultList.add(result);
+        }
+        
+        showUserResultButton.setChecked(userResultsActive);
+        showSystemResultButton.setChecked(!userResultsActive);
+        Logger.d("switchBetweenResults: showing " + resultList.getCount() + " " +
+                 (userResultsActive ? "user" : "system") + " results");
+        runOnUiThread(new Runnable() {
+          public void run() { resultList.notifyDataSetChanged(); }
+        });
+      }
+    };
+    showUserResultButton.setOnCheckedChangeListener(buttonClickListener);
+    showSystemResultButton.setOnCheckedChangeListener(buttonClickListener);
+    
     this.consoleView = (ListView) this.findViewById(R.id.resultConsole);
-    this.resultList = new ArrayAdapter<String>(getApplicationContext(), R.layout.list_item);
+    this.resultList = new ArrayAdapter<String>(getApplicationContext(),
+        R.layout.list_item);
     this.consoleView.setAdapter(this.resultList);
     this.findViewById(R.id.resultConsole);
     /**
@@ -137,8 +199,8 @@ public class MainActivity extends Activity {
      * 4. Run both a) Traceroute and b) PING to www.google.com parallelly 
      *      with user priority
      */
-    Button button = (Button)this.findViewById(R.id.start_measurement);  
-    button.setText("Start Measurement");  
+    button = (Button)this.findViewById(R.id.start_measurement);  
+    button.setText("Submit a measurement task");  
     button.setOnClickListener(new View.OnClickListener()   
     {
       public void onClick(View view) 
@@ -152,17 +214,33 @@ public class MainActivity extends Activity {
         try {
           switch (counter % 4) {   
             case 0:
-              // Single task with server level priority
-              params.put("target","www.google.com");
-              priority = MeasurementTask.INVALID_PRIORITY;
-              task = api.createTask(API.TaskType.DNSLOOKUP
+              /** 
+               * TCP Throughput task (Downlink)
+               * Necessary parameter:
+               *    dir_up: set to "Up" or "true" for uplink test, otherwise it
+               *            will run downlink test
+               * Advanced setting parameter:
+               *    data_limit_mb_up: Data limitation for uplink
+               *    data_limit_mb_down: Data limitation for downlink
+               *    duration_period_sec: Upperbound for entire measurement period 
+               *    pkt_size_up_bytes: Packet size for uplink test  
+               *    sample_period_sec: The length of sample window which is used
+               *            to calculate TCP throughput
+               *    slow_start_period_sec: Time to skip slow start period
+               *    target: Currently only support MLab
+               *    tcp_timeout_sec: Timeout value for establishing
+               *                     TCP connection
+               */
+              task = api.createTask(API.TaskType.TCPTHROUGHPUT
                 , Calendar.getInstance().getTime(), endTime, 120, 1
                 , priority, contextIntervalSec, params);
               break;
             case 1:
-              // Single task with user level priority
-              params.put("url","www.google.com");
-              task = api.createTask(API.TaskType.HTTP
+              /** 
+               * TCP Throughput task (Uplink)
+               */
+              params.put("dir_up", "true");
+              task = api.createTask(API.TaskType.TCPTHROUGHPUT
                 , Calendar.getInstance().getTime(), endTime, 120, 1
                 , priority, contextIntervalSec, params);
               break;
