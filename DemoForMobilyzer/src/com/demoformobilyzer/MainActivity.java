@@ -23,10 +23,9 @@ import android.widget.ListView;
 import android.widget.ToggleButton;
 import android.widget.CompoundButton.OnCheckedChangeListener;
 
-import com.demoformobilyzer.R;
-
-
 import com.mobilyzer.MeasurementResult;
+import com.mobilyzer.MeasurementScheduler.DataUsageProfile;
+import com.mobilyzer.MeasurementScheduler.TaskStatus;
 import com.mobilyzer.MeasurementTask;
 import com.mobilyzer.UpdateIntent;
 
@@ -61,6 +60,21 @@ public class MainActivity extends Activity {
     this.api = API.getAPI(this, clientKey);
     
     /**
+     * Now we can immediately use Mobilyzer API after created.
+     */
+    MeasurementTask task = null;
+    HashMap<String, String> params = new HashMap<String, String>();
+    params.put("target", "www.google.com");
+    try {
+      task = api.createTask(API.TaskType.DNSLOOKUP
+        , Calendar.getInstance().getTime(), null, 120, 1
+        , MeasurementTask.USER_PRIORITY, 1, params);
+      api.submitTask(task);
+    } catch (MeasurementError e) {
+      Logger.e("Expected Error", e);
+    }
+    
+    /**
      * Register an broadcast receiver in the activity which needs to process 
      * measurement results. There are two actions:
      * 1. api.userResultAction: results of USER_PRIORITY task.
@@ -70,9 +84,44 @@ public class MainActivity extends Activity {
     IntentFilter filter = new IntentFilter();
     filter.addAction(api.userResultAction);
     filter.addAction(API.SERVER_RESULT_ACTION);
+    filter.addAction(api.batteryThresholdAction);
+    filter.addAction(api.checkinIntervalAction);
+    filter.addAction(api.taskStatusAction);
+    filter.addAction(api.dataUsageAction);
+    
     broadcastReceiver = new BroadcastReceiver() {
       @Override
       public void onReceive(Context context, Intent intent) {
+        String text = intent.getAction();
+        if ( intent.getAction().equals(api.batteryThresholdAction) ) {
+          text = "Battery Threshold is "
+              + intent.getIntExtra(UpdateIntent.BATTERY_THRESHOLD_PAYLOAD, -1);
+          Logger.e(text);
+          resultList.insert(text, 0);
+          return;
+        }
+        else if ( intent.getAction().equals(api.checkinIntervalAction)) {
+          text = "Checkin interval is "
+              + intent.getLongExtra(UpdateIntent.CHECKIN_INTERVAL_PAYLOAD, -1);
+          Logger.e(text);
+          resultList.insert(text, 0);
+          return;
+        }
+        else if ( intent.getAction().equals(api.taskStatusAction)) {
+          text = "Task status for task "
+              + intent.getStringExtra(UpdateIntent.TASKID_PAYLOAD) + " is "
+              + (TaskStatus)intent.getSerializableExtra(UpdateIntent.TASK_STATUS_PAYLOAD);
+          Logger.e(text);
+          resultList.insert(text, 0);
+          return;
+        }
+        else if ( intent.getAction().equals(api.dataUsageAction)) {
+          text = "Data usage profile is "
+              + (DataUsageProfile)intent.getSerializableExtra(UpdateIntent.DATA_USAGE_PAYLOAD);
+          Logger.e(text);
+          resultList.insert(text, 0);
+          return;
+        }
         /**
          * Timestamps for delay measurement
          */
@@ -169,7 +218,7 @@ public class MainActivity extends Activity {
         final List<String> scheduler_results =
             (userResultsActive ? userResults : serverResults);
         for (String result : scheduler_results) {
-          resultList.add(result);
+          resultList.insert(result, 0);
         }
         
         showUserResultButton.setChecked(userResultsActive);
@@ -203,6 +252,7 @@ public class MainActivity extends Activity {
     button.setText("Submit a measurement task");  
     button.setOnClickListener(new View.OnClickListener()   
     {
+      private MeasurementTask prevTask = null;
       public void onClick(View view) 
       {
         Map<String, String> params = new HashMap<String, String>();
@@ -212,14 +262,13 @@ public class MainActivity extends Activity {
         MeasurementTask task = null;
         ArrayList<MeasurementTask> taskList = new ArrayList<MeasurementTask>();
         try {
-          switch (counter % 4) {   
+          switch (counter % 10) {   
             case 0:
               /** 
                * TCP Throughput task (Downlink)
-               * Necessary parameter:
-               *    dir_up: set to "Up" or "true" for uplink test, otherwise it
-               *            will run downlink test
-               * Advanced setting parameter:
+               * Optional parameter:
+               *    dir_up: set to "Up" or "true" for uplink test. By default it
+               *       will run downlink test .
                *    data_limit_mb_up: Data limitation for uplink
                *    data_limit_mb_down: Data limitation for downlink
                *    duration_period_sec: Upperbound for entire measurement period 
@@ -230,6 +279,7 @@ public class MainActivity extends Activity {
                *    target: Currently only support MLab
                *    tcp_timeout_sec: Timeout value for establishing
                *                     TCP connection
+               * 
                */
               task = api.createTask(API.TaskType.TCPTHROUGHPUT
                 , Calendar.getInstance().getTime(), endTime, 120, 1
@@ -245,6 +295,95 @@ public class MainActivity extends Activity {
                 , priority, contextIntervalSec, params);
               break;
             case 2:
+              /** 
+               * DNS lookup task
+               * Required parameter:
+               *   target - Hostname of the target to resolve
+               * Optional parameter:
+               *   server - IP address of a DNS server to use as the resolver.
+               *     If not present, the device's default resolver is used.
+               */
+              params.put("target", "www.google.com");
+              task = api.createTask(API.TaskType.DNSLOOKUP
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            case 3:
+              /** 
+               * HTTP Get task
+               * Required parameter:
+               *   url - URL to request
+               * Optional parameters:
+               *   method - HTTP method to use. Defaults to "GET"
+               *   headers - String (possibly containing newlines) with
+               *     additional headers to send with the request. Each header
+               *     and value pair is in the form of "headerParam:value", with
+               *     different pairs separated by "\r\n".
+               *   body - String with the request body to send (if method is "POST")
+               */
+              params.put("url", "www.google.com");
+              task = api.createTask(API.TaskType.HTTP
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            case 4:
+              /** 
+               * Ping task
+               * Required parameter: 
+               *   target - the host name or IP address of the server to ping
+               * Optional parameters:
+               *   packet_size_byte - the packet per ICMP ping in the
+               *     unit of bytes. Default to 56.
+               *   ping_timeout_sec - the number of seconds we wait
+               *     for a ping response. Default to 0.5.
+               */
+              params.put("target", "www.google.com");
+              task = api.createTask(API.TaskType.PING
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            case 5:
+              /** 
+               * Traceroute task
+               * Required parameter:
+               *   target - the hostname or IP address to use as the
+               *     target of the traceroute.
+               * Optional parameters:
+               *   packet_size_byte - the packet per ICMP ping in the
+               *     unit of bytes. Default to 56.
+               *   ping_timeout_sec - the number of seconds we wait
+               *     for a ping response. Default to 2.
+               *   ping_interval_sec - the interval between successive
+               *     pings in seconds. Default to 0.5.
+               *   pings_per_hop - the number of pings we use for
+               *     each ttl value. Default to 3.
+               *   max_hop_count - the total number of hops we ping
+               *     before we declare the traceroute fails. Default to 10.
+               */
+              params.put("target", "www.google.com");
+              task = api.createTask(API.TaskType.TRACEROUTE
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            case 6:
+              /** 
+               * UDP Burst task (Downlink)
+               */
+              task = api.createTask(API.TaskType.UDPBURST
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            case 7:
+              /** 
+               * UDP Burst task (Downlink)
+               */
+              params.put("direction", "Up");
+              task = api.createTask(API.TaskType.UDPBURST
+                , Calendar.getInstance().getTime(), endTime, 120, 1
+                , priority, contextIntervalSec, params);
+              break;
+            
+            case 8:
               // add sequential task
               params.put("url","www.google.com");
               task = api.createTask(API.TaskType.HTTP
@@ -262,7 +401,7 @@ public class MainActivity extends Activity {
                 , Calendar.getInstance().getTime(), endTime, 120, 1
                 , priority, contextIntervalSec, params, taskList);
               break;  
-            case 3:
+            case 9:
               // add parallel task
               params.put("target","www.google.com");
               task = api.createTask(API.TaskType.TRACEROUTE
@@ -291,12 +430,45 @@ public class MainActivity extends Activity {
          * Submit this task to the scheduler
          */
         try {
+          /**
+           * How to cancel a task
+           */
+//          if ( counter > 1 ) api.cancelTask(prevTask.getTaskId());
           api.submitTask(task);
+          
+          /**
+           * How to set and get batteryThreshold (by default threshold is 60)
+           * When the battery is below threshold, checkin will never be performed
+           * Currently this rule will take effect even the device is on charge  
+           */
+//          api.setBatteryThreshold(62);
+//          api.getBatteryThreshold();
+          /**
+           * How to set and get checkin interval (by default 3600sec = 1h)
+           * the scheduler will checkin to openmobiledata.appspot.com
+           * every checkin_interval
+           */
+//          api.setCheckinInterval(18000);
+//          api.getCheckinInterval();
+          /**
+           * How to get the task running status for submitted task
+           */
+//          api.getTaskStatus(task.getTaskId());
+          /**
+           * How to set and get current data limitation profile
+           * We put several data limitation type here to prevent cause huge data
+           * consumption under cellular network. Later we will put detailed 
+           * explanation here. 
+           */
+//          api.setDataUsage(DataUsageProfile.PROFILE2);
+//          api.getDataUsage();
         } catch (MeasurementError e) {
-          Logger.e(e.getMessage());
+          Logger.e("Error occured: " + e.getMessage());
         }
+        prevTask = task;
       }
     });
+    
   }
 
   @Override
