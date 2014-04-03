@@ -14,7 +14,7 @@
         android:label="@string/app_name"
         android:theme="@style/AppTheme">
         <activity
-            android:name="com.demoformobilyzer.MainActivity"
+            android:name="com.demoformobilyzer.DemoAppForMobilyzer"
             android:label="DemoForMobilyzer">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
